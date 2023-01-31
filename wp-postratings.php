@@ -3,7 +3,7 @@
 Plugin Name: WP-PostRatings
 Plugin URI: https://lesterchan.net/portfolio/programming/php/
 Description: Adds an AJAX rating system for your WordPress site's content.
-Version: 1.89
+Version: 1.90.1
 Author: Lester 'GaMerZ' Chan
 Author URI: https://lesterchan.net
 Text Domain: wp-postratings
@@ -11,7 +11,7 @@ Text Domain: wp-postratings
 
 
 /*
-	Copyright 2020 Lester Chan (email: lesterchan@gmail.com)
+	Copyright 2023 Lester Chan (email: lesterchan@gmail.com)
 
 	This program is free software; you can redistribute it and/or modify
 	it under the terms of the GNU General Public License as published by
@@ -41,7 +41,7 @@ if ( ! defined( 'ABSPATH' ) ) {
  * Plugin version
  * Set wp-postratings plugin version.
  */
-define( 'WP_POSTRATINGS_VERSION', '1.89' );
+define( 'WP_POSTRATINGS_VERSION', '1.90.1' );
 
 /**
  * Rating logs table name
@@ -56,6 +56,7 @@ $wpdb->ratings = $wpdb->prefix . 'ratings';
 require_once 'includes/postratings-activation.php';
 require_once 'includes/postratings-admin.php';
 require_once 'includes/postratings-i18n.php';
+require_once 'includes/postratings-mutex.php';
 require_once 'includes/postratings-scripts.php';
 require_once 'includes/postratings-shortcodes.php';
 require_once 'includes/postratings-stats.php';
@@ -110,7 +111,7 @@ function the_ratings($start_tag = 'div', $custom_id = 0, $display = true) {
 	$ratings_options['richsnippet'] = isset( $ratings_options['richsnippet'] ) ? $ratings_options['richsnippet'] : 1;
 	$disable_richsnippet = apply_filters( 'wp_postratings_disable_richsnippet', false );
 	if( ! $disable_richsnippet && is_singular() && $ratings_options['richsnippet'] ) {
-		$itemtype = apply_filters('wp_postratings_schema_itemtype', 'itemscope itemtype="http://schema.org/Article"');
+		$itemtype = apply_filters('wp_postratings_schema_itemtype', 'itemscope itemtype="https://schema.org/Article"');
 		$attributes = 'id="post-ratings-'.$ratings_id.'" class="post-ratings" '.$itemtype;
 	} else {
 		$attributes = 'id="post-ratings-'.$ratings_id.'" class="post-ratings"';
@@ -547,7 +548,14 @@ function process_ratings() {
 				}
 			}
 			header( 'Content-Type: text/html; charset=' . get_option( 'blog_charset' ) );
-			$rated = check_rated($post_id);
+			// Acquire lock
+			$fp_lock = ratings_acquire_lock( $post_id );
+			if ( $fp_lock === false ) {
+				esc_html_e( 'Unable to obtain lock', 'wp-postratings' );
+				exit();
+			}
+
+			$rated = check_rated( $post_id );
 			// Check Whether Post Has Been Rated By User
 			if(!$rated) {
 				// Check Whether Is There A Valid Post
@@ -602,9 +610,12 @@ function process_ratings() {
 					exit();
 				} // End if($post)
 			} else {
-				printf(esc_html__('You Had Already Rated This Post. Post ID #%s.', 'wp-postratings'), $post_id);
+				printf( esc_html__( 'You Had Already Rated This Post. Post ID #%s.', 'wp-postratings' ), $post_id );
 				exit();
 			}// End if(!$rated)
+
+			// Release lock
+			ratings_release_lock( $fp_lock, $post_id );
 		} // End if($rate && $post_id && check_allowtorate())
 	} // End if(isset($_REQUEST['action']) && $_REQUEST['action'] == 'postratings')
 }
@@ -872,7 +883,7 @@ function postratings_page_general_stats($content) {
 	if($stats_display['ratings'] === 1) {
 		$content .= '<p><strong>'.esc_html__('WP-PostRatings', 'wp-postratings').'</strong></p>'."\n";
 		$content .= '<ul>'."\n";
-		$content .= '<li>'.esc_html(sprintf(_n('%s user casted his vote.', '%s users casted their vote.', get_ratings_users(false), 'wp-postratings'), '<strong>'.number_format_i18n(get_ratings_users(false)).'</strong>')).'</li>'."\n";
+		$content .= '<li><strong>'.esc_html(number_format_i18n(get_ratings_users(false))).'</strong> '.esc_html__(sprintf(_n('user casted his vote.', 'users casted their vote.', get_ratings_users(false), 'wp-postratings'))).'</li>'."\n";
 		$content .= '</ul>'."\n";
 	}
 	return $content;
@@ -1205,7 +1216,7 @@ function expand_ratings_template($template, $post_data, $post_ratings_data = nul
 	$ratings_options['richsnippet_ratings'] = isset( $ratings_options['richsnippet_ratings'] ) ? $ratings_options['richsnippet_ratings'] : 1;
 	$disable_richsnippet = apply_filters( 'wp_postratings_disable_richsnippet', false );
 	if ( ! $disable_richsnippet && $ratings_options['richsnippet'] && is_singular() && $is_main_loop ) {
-		$itemtype = apply_filters( 'wp_postratings_schema_itemtype', 'itemscope itemtype="http://schema.org/Article"' );
+		$itemtype = apply_filters( 'wp_postratings_schema_itemtype', 'itemscope itemtype="https://schema.org/Article"' );
 
 		if ( empty( $post_excerpt ) ) {
 			$post_excerpt = ratings_post_excerpt( $post_id, $post->post_excerpt, $post->post_content );
@@ -1258,7 +1269,7 @@ function expand_ratings_template($template, $post_data, $post_ratings_data = nul
 
 		$ratings_meta = '';
 		if ( $ratings_options['richsnippet_ratings']  && $post_ratings_average > 0 ) {
-			$ratings_meta .= '<div style="display: none;" itemprop="aggregateRating" itemscope itemtype="http://schema.org/AggregateRating">';
+			$ratings_meta .= '<div style="display: none;" itemprop="aggregateRating" itemscope itemtype="https://schema.org/AggregateRating">';
 			$ratings_meta .= '<meta itemprop="bestRating" content="' . $ratings_max . '" />';
 			$ratings_meta .= '<meta itemprop="worstRating" content="1" />';
 			$ratings_meta .= '<meta itemprop="ratingValue" content="' . $post_ratings_average . '" />';
